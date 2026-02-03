@@ -165,11 +165,17 @@ export async function getSECFinancials(cik: string): Promise<SECFinancials | nul
       return results;
     }
     
-    const revenue = extractFact('Revenues').length > 0 
-      ? extractFact('Revenues') 
-      : extractFact('RevenueFromContractWithCustomerExcludingAssessedTax').length > 0
-        ? extractFact('RevenueFromContractWithCustomerExcludingAssessedTax')
-        : extractFact('SalesRevenueNet');
+    // Pick the revenue concept with the most recent data
+    const revenueCandidates = [
+      extractFact('RevenueFromContractWithCustomerExcludingAssessedTax'),
+      extractFact('RevenueFromContractWithCustomerIncludingAssessedTax'),
+      extractFact('Revenues'),
+      extractFact('SalesRevenueNet'),
+      extractFact('SalesRevenueGoodsNet'),
+    ];
+    const revenue = revenueCandidates
+      .filter(r => r.length > 0)
+      .sort((a, b) => (b[0]?.year || 0) - (a[0]?.year || 0))[0] || [];
     
     return {
       revenue,
