@@ -11,7 +11,6 @@ export interface FDICData {
     activeFlag: boolean;
     regulatorName: string;
     charterClass: string;
-    insuredStatus: string;
     returnOnAssets: number;
     equityCapitalRatio: number;
   }>;
@@ -20,77 +19,53 @@ export interface FDICData {
 
 export async function getFDICData(companyName: string): Promise<FDICData | null> {
   try {
-    const params = new URLSearchParams({
-      filters: `INSTNAME:"${companyName}"`,
-      fields: 'INSTNAME,CERT,CITY,STNAME,ASSET,DEP,NETINC,ESTYMD,ACTIVE,REGAGENT,CHRTAGNT,INSTCAT,REPDTE,ROA,EQCAPRT',
-      limit: '10',
-      sort_by: 'ASSET',
-      sort_order: 'DESC',
-    });
+    // FDIC API uses NAME field, and we need to use filters syntax
+    // Try first with exact-ish filter, then broader
+    const fields = 'NAME,CERT,CITY,STALP,ASSET,DEP,NETINC,ESTYMD,ACTIVE,REGAGENT,BKCLASS,ROA';
     
-    const res = await fetch(`https://banks.data.fdic.gov/api/financials?${params}`, {
-      headers: { 'Accept': 'application/json' },
-    });
+    // Try multiple approaches
+    const urls = [
+      `https://banks.data.fdic.gov/api/financials?filters=REPDTE%3A20240930%20AND%20INSTNAME%3A%22${encodeURIComponent(companyName)}%22&fields=INSTNAME,CERT,ASSET,DEP,NETINC,ROA,EQCAPRT&limit=10&sort_by=ASSET&sort_order=DESC`,
+      `https://banks.data.fdic.gov/api/institutions?filters=ACTIVE%3A1%20AND%20NAME%3A%22${encodeURIComponent(companyName)}%22&fields=${fields}&limit=10&sort_by=ASSET&sort_order=DESC`,
+      `https://banks.data.fdic.gov/api/institutions?filters=ACTIVE%3A1%20AND%20NAMEHCR%3A%22${encodeURIComponent(companyName.toUpperCase())}%22&fields=${fields}&limit=10&sort_by=ASSET&sort_order=DESC`,
+    ];
     
-    if (!res.ok) {
-      // Try institutions endpoint
-      const params2 = new URLSearchParams({
-        filters: `INSTNAME:"${companyName}"`,
-        fields: 'INSTNAME,CERT,CITY,STALP,ASSET,DEP,NETINC,ESTYMD,ACTIVE,REGAGENT',
-        limit: '10',
-        sort_by: 'ASSET',
-        sort_order: 'DESC',
-      });
-      
-      const res2 = await fetch(`https://banks.data.fdic.gov/api/institutions?${params2}`);
-      if (!res2.ok) throw new Error(`FDIC: ${res2.status}`);
-      const data2 = await res2.json();
-      
-      const institutions = (data2.data || []).map((item: { data: Record<string, string | number | boolean> }) => {
-        const d = item.data;
-        return {
-          name: String(d.INSTNAME || ''),
-          certNumber: String(d.CERT || ''),
-          city: String(d.CITY || ''),
-          state: String(d.STALP || d.STNAME || ''),
-          totalAssets: Number(d.ASSET || 0) * 1000,
-          totalDeposits: Number(d.DEP || 0) * 1000,
-          netIncome: Number(d.NETINC || 0) * 1000,
-          established: String(d.ESTYMD || ''),
-          activeFlag: d.ACTIVE === 1 || d.ACTIVE === '1',
-          regulatorName: String(d.REGAGENT || ''),
-          charterClass: '',
-          insuredStatus: '',
-          returnOnAssets: 0,
-          equityCapitalRatio: 0,
-        };
-      });
-      
-      return { institutions, found: institutions.length > 0 };
+    for (const url of urls) {
+      try {
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) continue;
+        
+        const data = await res.json();
+        const items = data.data || [];
+        
+        if (items.length > 0) {
+          const institutions = items.map((item: { data: Record<string, string | number | boolean> }) => {
+            const d = item.data;
+            return {
+              name: String(d.NAME || d.INSTNAME || ''),
+              certNumber: String(d.CERT || ''),
+              city: String(d.CITY || ''),
+              state: String(d.STALP || d.STNAME || ''),
+              totalAssets: Number(d.ASSET || 0) * 1000, // FDIC reports in thousands
+              totalDeposits: Number(d.DEP || 0) * 1000,
+              netIncome: Number(d.NETINC || 0) * 1000,
+              established: String(d.ESTYMD || ''),
+              activeFlag: d.ACTIVE === 1 || d.ACTIVE === '1' || d.ACTIVE === true,
+              regulatorName: String(d.REGAGENT || ''),
+              charterClass: String(d.BKCLASS || ''),
+              returnOnAssets: Number(d.ROA || 0),
+              equityCapitalRatio: Number(d.EQCAPRT || 0),
+            };
+          });
+          
+          return { institutions, found: true };
+        }
+      } catch {
+        continue;
+      }
     }
     
-    const data = await res.json();
-    const institutions = (data.data || []).map((item: { data: Record<string, string | number | boolean> }) => {
-      const d = item.data;
-      return {
-        name: String(d.INSTNAME || ''),
-        certNumber: String(d.CERT || ''),
-        city: String(d.CITY || ''),
-        state: String(d.STNAME || ''),
-        totalAssets: Number(d.ASSET || 0) * 1000,
-        totalDeposits: Number(d.DEP || 0) * 1000,
-        netIncome: Number(d.NETINC || 0) * 1000,
-        established: String(d.ESTYMD || ''),
-        activeFlag: d.ACTIVE === 1,
-        regulatorName: String(d.REGAGENT || ''),
-        charterClass: String(d.CHRTAGNT || ''),
-        insuredStatus: String(d.INSTCAT || ''),
-        returnOnAssets: Number(d.ROA || 0),
-        equityCapitalRatio: Number(d.EQCAPRT || 0),
-      };
-    });
-    
-    return { institutions, found: institutions.length > 0 };
+    return { institutions: [], found: false };
   } catch (err) {
     console.error('FDIC error:', err);
     return null;
